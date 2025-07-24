@@ -611,11 +611,12 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="pCloudSync-deconflict 1.1.1"
+        version="pCloudSync-deconflict 1.2.0"
     )
     parser.add_argument(
-        "path",
-        help="Path to the directory to scan"
+        "paths",
+        nargs="+",
+        help="Path(s) to the directory/directories to scan"
     )
     parser.add_argument(
         "-r", "--recursive",
@@ -677,42 +678,79 @@ def main():
     
     args = parser.parse_args()
     
-    if not os.path.exists(args.path):
-        print(f"Error: Path '{args.path}' does not exist", file=sys.stderr)
-        sys.exit(1)
+    # Validate all paths first
+    for path in args.paths:
+        if not os.path.exists(path):
+            print(f"Error: Path '{path}' does not exist", file=sys.stderr)
+            sys.exit(1)
+        
+        if not os.path.isdir(path):
+            print(f"Error: Path '{path}' is not a directory", file=sys.stderr)
+            sys.exit(1)
     
-    if not os.path.isdir(args.path):
-        print(f"Error: Path '{args.path}' is not a directory", file=sys.stderr)
-        sys.exit(1)
-    
-    print(f"Scanning {'recursively' if args.recursive else 'non-recursively'} in: {args.path}")
+    # Display scanning configuration
+    if len(args.paths) == 1:
+        print(f"Scanning {'recursively' if args.recursive else 'non-recursively'} in: {args.paths[0]}")
+    else:
+        print(f"Scanning {'recursively' if args.recursive else 'non-recursively'} in {len(args.paths)} directories:")
+        for path in args.paths:
+            print(f"  - {path}")
     print(f"Using comparison method: {args.method}")
     if not args.auto_delete and not args.dry_run:
         print("Will ask for confirmation before deleting identical files")
     print()
     
-    # Find conflicted pairs
-    pairs = find_conflicted_pairs(args.path, args.recursive, show_progress=not args.no_progress, 
-                                 cross_device=args.cross_device, include_local_mounts=args.include_local_mounts)
+    # Accumulate results across all paths
+    all_pairs = []
+    path_results = {}
     
-    if not pairs:
-        print("No conflicted file pairs found.")
+    # Process each path
+    for path_idx, path in enumerate(args.paths):
+        if len(args.paths) > 1:
+            print(f"\n{'='*60}")
+            print(f"Processing directory {path_idx + 1}/{len(args.paths)}: {path}")
+            print(f"{'='*60}\n")
+        
+        # Find conflicted pairs for this path
+        pairs = find_conflicted_pairs(path, args.recursive, show_progress=not args.no_progress, 
+                                     cross_device=args.cross_device, include_local_mounts=args.include_local_mounts)
+        
+        # Store results for this path
+        path_results[path] = {
+            'pairs': pairs,
+            'identical_count': 0,
+            'different_count': 0,
+            'deleted_files': [],
+            'different_files': []
+        }
+        
+        all_pairs.extend(pairs)
+    
+    if not all_pairs:
+        print("No conflicted file pairs found in any of the specified directories.")
         return
     
-    print(f"Found {len(pairs)} conflicted file pair(s)\n")
+    print(f"Found {len(all_pairs)} conflicted file pair(s) total\n")
     
-    identical_count = 0
-    different_count = 0
-    deleted_files = []
-    different_files = []
+    # Global counters
+    total_identical_count = 0
+    total_different_count = 0
+    all_deleted_files = []
+    all_different_files = []
     
     # Compare each pair
-    for original, conflicted in pairs:
+    for original, conflicted in all_pairs:
+        # Find which path this pair belongs to
+        for path in path_results:
+            if (original, conflicted) in path_results[path]['pairs']:
+                current_path_key = path
+                break
         try:
             result = compare_files(original, conflicted, args.method)
             
             if result["identical"]:
-                identical_count += 1
+                total_identical_count += 1
+                path_results[current_path_key]['identical_count'] += 1
                 if args.show_identical or args.verbose:
                     print(f"✓ IDENTICAL: {original.name}")
                     if args.verbose:
@@ -732,7 +770,8 @@ def main():
                     print(f"      {result['conflicted']}")
                     print(f"    are identical, would delete")
                     print(f"      {result['conflicted']}")
-                    deleted_files.append(str(conflicted))
+                    all_deleted_files.append(str(conflicted))
+                    path_results[current_path_key]['deleted_files'].append(str(conflicted))
                 elif args.auto_delete:
                     should_delete = True
                 else:
@@ -746,7 +785,8 @@ def main():
                         print(f"    are identical, deleting")
                         print(f"      {result['conflicted']}")
                         conflicted.unlink()
-                        deleted_files.append(str(conflicted))
+                        all_deleted_files.append(str(conflicted))
+                        path_results[current_path_key]['deleted_files'].append(str(conflicted))
                         print(f"    ✓ Deleted successfully")
                     except Exception as e:
                         print(f"  → Error deleting {conflicted}: {e}", file=sys.stderr)
@@ -756,7 +796,8 @@ def main():
                 if args.verbose:
                     print()
             else:
-                different_count += 1
+                total_different_count += 1
+                path_results[current_path_key]['different_count'] += 1
                 print(f"✗ DIFFERENT: {original.name}")
                 if args.verbose:
                     print(f"  Original:    {result['original']} ({result['original_size']:,} bytes)")
@@ -770,49 +811,65 @@ def main():
                     print()
                 
                 # Add to list for manual review
-                different_files.append(result)
+                all_different_files.append(result)
+                path_results[current_path_key]['different_files'].append(result)
         
         except Exception as e:
             print(f"Error comparing {original} and {conflicted}: {e}", file=sys.stderr)
             continue
     
     # Interactive conflict resolution for different files
-    if args.resolve and different_files:
+    if args.resolve and all_different_files:
         if args.dry_run:
             # Show what actions would be taken without doing them
-            resolved_count_interactive = resolve_conflicts_dry_run(different_files)
+            resolved_count_interactive = resolve_conflicts_dry_run(all_different_files)
             print(f"\n🔍 Would show {resolved_count_interactive} conflict(s) for interactive resolution")
         else:
             # Actually perform interactive resolution
-            resolved_count_interactive = resolve_conflicts(different_files)
-            # Update the different_files list to remove resolved conflicts
+            resolved_count_interactive = resolve_conflicts(all_different_files)
+            # Update the all_different_files list to remove resolved conflicts
             if resolved_count_interactive > 0:
                 print(f"\n🎉 Successfully resolved {resolved_count_interactive} conflict(s) interactively")
-                # Re-scan to update different_files list (files may have been deleted/renamed)
-                different_files = [f for f in different_files 
+                # Re-scan to update all_different_files list (files may have been deleted/renamed)
+                all_different_files = [f for f in all_different_files 
                                  if Path(f['original']).exists() and Path(f['conflicted']).exists()]
-                different_count = len(different_files)
+                total_different_count = len(all_different_files)
     
     # Save list of different files
     active_count = 0
-    if different_files or os.path.exists(args.output):
-        output_file, active_count, resolved_count = save_different_files_list(different_files, args.output)
+    if all_different_files or os.path.exists(args.output):
+        output_file, active_count, resolved_count = save_different_files_list(all_different_files, args.output)
         print(f"\nConflict tracking updated in: {output_file}")
         print(f"  Active conflicts: {active_count}")
         if resolved_count > 0:
             print(f"  Resolved conflicts: {resolved_count}")
     
-    # Summary
+    # Per-directory summary if multiple paths
+    if len(args.paths) > 1:
+        print("\n" + "="*60)
+        print("PER-DIRECTORY RESULTS:")
+        print("="*60)
+        for path in args.paths:
+            results = path_results[path]
+            print(f"\n📁 {path}:")
+            print(f"   Conflicted pairs: {len(results['pairs'])}")
+            if len(results['pairs']) > 0:
+                print(f"   Identical files: {results['identical_count']}")
+                print(f"   Different files: {results['different_count']}")
+                if results['deleted_files']:
+                    print(f"   {'Would delete' if args.dry_run else 'Deleted'}: {len(results['deleted_files'])} file(s)")
+    
+    # Overall summary
     print("\n" + "="*50)
-    print("SUMMARY:")
-    print(f"Total conflicted pairs found: {len(pairs)}")
-    print(f"Identical files: {identical_count}")
-    print(f"Different files: {different_count}")
+    print("OVERALL SUMMARY:")
+    print(f"Total conflicted pairs found: {len(all_pairs)}")
+    print(f"Identical files: {total_identical_count}")
+    print(f"Different files: {total_different_count}")
     
-    if deleted_files:
-        print(f"\n{'Would delete' if args.dry_run else 'Deleted'} {len(deleted_files)} identical conflicted file(s)")
+    if all_deleted_files:
+        print(f"\n{'Would delete' if args.dry_run else 'Deleted'} {len(all_deleted_files)} identical conflicted file(s)")
     
-    if identical_count > 0 and not args.auto_delete and not args.dry_run and len(deleted_files) < identical_count:
+    if total_identical_count > 0 and not args.auto_delete and not args.dry_run and len(all_deleted_files) < total_identical_count:
         print(f"\nTip: Use --auto-delete to automatically delete identical conflicted files")
     
     if active_count > 0:

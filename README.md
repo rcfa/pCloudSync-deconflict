@@ -89,6 +89,10 @@ make install    # Installs to /usr/local/bin
 ./pCloudSync-deconflict /path/to/scan           # Non-recursive scan
 ./pCloudSync-deconflict -r /path/to/scan        # Recursive scan
 
+# Multiple directories (v1.2.0+)
+./pCloudSync-deconflict path1 path2 path3       # Scan multiple directories
+./pCloudSync-deconflict -r ~/Documents ~/Desktop # Recursive multi-directory scan
+
 # Conflict resolution
 ./pCloudSync-deconflict -r --resolve /path      # Interactive resolution
 ./pCloudSync-deconflict -r --resolve --dry-run  # Preview conflicts
@@ -148,6 +152,15 @@ make install    # Installs to /usr/local/bin
 ```bash
 # Handle Unicode filenames, files without extensions
 ./pCloudSync-deconflict -r --resolve ~/Desktop
+```
+
+### 📁 Multiple Directory Cleanup (v1.2.0+)
+```bash
+# Clean up common sync conflict areas in one run
+./pCloudSync-deconflict -r --auto-delete ~/Documents ~/Desktop ~/Downloads
+
+# Preview conflicts across all project directories
+./pCloudSync-deconflict -r --dry-run ~/Projects/web ~/Projects/mobile ~/Projects/backend
 ```
 
 ## 🧪 Testing & Validation
@@ -245,7 +258,8 @@ make clean
 
 ## 📈 Version History
 
-- **v1.1.1** (Latest): Added `--version` option for standard CLI behavior
+- **v1.2.0** (Latest): Support for processing multiple directories in a single run
+- **v1.1.1**: Added `--version` option for standard CLI behavior
 - **v1.1.0**: Major update with interactive conflict resolution and comprehensive test suite
 - **v1.0.0**: Initial stable release with auto-delete and JSON tracking
 

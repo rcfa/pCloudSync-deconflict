@@ -61,3 +61,4 @@ conflicted_files_to_review.json
 # Claude specific
 .claude/
 CLAUDE.md
+chat.log

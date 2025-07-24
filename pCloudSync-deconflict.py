@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-DeConflict - A tool to find and compare conflicted files from cloud sync services
+DeConflict - A tool to find and compare conflicted files from pCloud sync services
 """
 
 import os

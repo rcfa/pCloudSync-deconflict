@@ -7,7 +7,7 @@ SOURCE := pCloudSync-deconflict.py
 APP_NAME := pCloudSync-deconflict
 VERSION := 1.0.0
 
-.PHONY: all clean build-macos build-universal install-deps
+.PHONY: all clean build-macos build-universal install-deps install uninstall
 
 all: build-universal
 
@@ -48,6 +48,21 @@ clean:
 	rm -rf build/ dist/ __pycache__/ *.spec
 	find . -name "*.pyc" -delete
 	find . -name "*.pyo" -delete
+
+install: build-universal
+	@echo "Installing $(APP_NAME) to /usr/local/bin..."
+	@if [ ! -d /usr/local/bin ]; then \
+		echo "Creating /usr/local/bin directory..."; \
+		sudo mkdir -p /usr/local/bin; \
+	fi
+	@sudo cp dist/$(APP_NAME) /usr/local/bin/
+	@sudo chmod 755 /usr/local/bin/$(APP_NAME)
+	@echo "Installation complete! $(APP_NAME) is now available in your PATH."
+
+uninstall:
+	@echo "Uninstalling $(APP_NAME) from /usr/local/bin..."
+	@sudo rm -f /usr/local/bin/$(APP_NAME)
+	@echo "Uninstall complete!"
 
 package: build-universal
 	@echo "Creating distribution package..."

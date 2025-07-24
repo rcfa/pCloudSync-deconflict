@@ -13,6 +13,7 @@ import time
 import subprocess
 import shutil
 import unicodedata
+import mimetypes
 from pathlib import Path
 from typing import List, Tuple, Dict, Set
 from datetime import datetime
@@ -93,6 +94,7 @@ def find_conflicted_pairs(directory: str, recursive: bool = True, show_progress:
     # Progress tracking
     spinner = ['-', '\\', '|', '/']
     spinner_idx = 0
+    last_spinner_update = time.time()
     files_processed = 0
     dirs_processed = 0
     last_update = time.time()
@@ -127,8 +129,14 @@ def find_conflicted_pairs(directory: str, recursive: bool = True, show_progress:
         return truncated
     
     def update_progress(current_path):
-        nonlocal spinner_idx
+        nonlocal spinner_idx, last_spinner_update
         if show_progress:
+            # Update spinner character only every 0.125 seconds
+            current_time = time.time()
+            if current_time - last_spinner_update >= 0.125:
+                spinner_idx = (spinner_idx + 1) % 4
+                last_spinner_update = current_time
+            
             # Put counts first for steady display
             prefix = f"{spinner[spinner_idx]} ({dirs_processed} dirs, {files_processed} files) Scanning: "
             path_str = str(current_path)
@@ -147,7 +155,6 @@ def find_conflicted_pairs(directory: str, recursive: bool = True, show_progress:
             # Clear entire line and redraw
             sys.stdout.write(f"\r{' ' * term_width}\r{progress_msg}")
             sys.stdout.flush()
-            spinner_idx = (spinner_idx + 1) % 4
     
     # Get the device ID of the starting directory for boundary checking
     try:
@@ -359,6 +366,244 @@ def save_different_files_list(different_files: List[Dict], output_file: str = "c
     
     return output_file, len(active_conflicts), len(all_conflicts) - len(active_conflicts)
 
+def format_file_info(file_path: Path) -> str:
+    """Format file metadata for display."""
+    try:
+        stat = file_path.stat()
+        size = stat.st_size
+        mtime = datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Human readable size
+        if size < 1024:
+            size_str = f"{size} B"
+        elif size < 1024 * 1024:
+            size_str = f"{size / 1024:.1f} KB"
+        elif size < 1024 * 1024 * 1024:
+            size_str = f"{size / (1024 * 1024):.1f} MB"
+        else:
+            size_str = f"{size / (1024 * 1024 * 1024):.1f} GB"
+        
+        return f"  Size: {size_str}\n  Modified: {mtime}\n  Path: {file_path}"
+    except Exception as e:
+        return f"  Error reading file info: {e}\n  Path: {file_path}"
+
+def is_text_file(file_path: Path) -> bool:
+    """Determine if a file is likely a text file."""
+    try:
+        # Check MIME type first
+        mime_type, _ = mimetypes.guess_type(str(file_path))
+        if mime_type and mime_type.startswith('text/'):
+            return True
+        
+        # Check file extension
+        text_extensions = {'.txt', '.py', '.js', '.html', '.css', '.json', '.xml', '.yaml', '.yml', 
+                          '.md', '.rst', '.conf', '.cfg', '.ini', '.log', '.csv', '.tsv'}
+        if file_path.suffix.lower() in text_extensions:
+            return True
+        
+        # Try to read first few bytes to check for binary content
+        with open(file_path, 'rb') as f:
+            chunk = f.read(1024)
+            # Check for null bytes (common in binary files)
+            if b'\x00' in chunk:
+                return False
+            # Try to decode as UTF-8
+            try:
+                chunk.decode('utf-8')
+                return True
+            except UnicodeDecodeError:
+                return False
+    except Exception:
+        return False
+
+def show_text_diff(original: Path, conflicted: Path) -> bool:
+    """Show a unified diff between two text files. Returns True if diff was shown."""
+    try:
+        with open(original, 'r', encoding='utf-8') as f1, open(conflicted, 'r', encoding='utf-8') as f2:
+            lines1 = f1.readlines()
+            lines2 = f2.readlines()
+        
+        import difflib
+        diff = list(difflib.unified_diff(
+            lines1, lines2, 
+            fromfile=f"a/{original.name}", 
+            tofile=f"b/{conflicted.name}",
+            lineterm=''
+        ))
+        
+        if diff:
+            print("\n📄 File Content Differences:")
+            print("-" * 60)
+            for line in diff[:50]:  # Limit to first 50 lines of diff
+                if line.startswith('+++') or line.startswith('---'):
+                    print(f"\033[1m{line}\033[0m")  # Bold
+                elif line.startswith('+'):
+                    print(f"\033[32m{line}\033[0m")  # Green
+                elif line.startswith('-'):
+                    print(f"\033[31m{line}\033[0m")  # Red
+                elif line.startswith('@@'):
+                    print(f"\033[36m{line}\033[0m")  # Cyan
+                else:
+                    print(line)
+            
+            if len(diff) > 50:
+                print(f"\n... (showing first 50 lines of {len(diff)} total diff lines)")
+            print("-" * 60)
+            return True
+    except Exception as e:
+        print(f"Could not show diff: {e}")
+        return False
+    return False
+
+def resolve_conflict_interactive(original: Path, conflicted: Path) -> str:
+    """Interactively resolve a conflict between two files. Returns action to take."""
+    print(f"\n🔀 CONFLICT: {original.name}")
+    print("=" * 60)
+    
+    print("\n📁 ORIGINAL FILE:")
+    print(format_file_info(original))
+    
+    print("\n📁 CONFLICTED FILE:")
+    print(format_file_info(conflicted))
+    
+    # Show diff for text files
+    if is_text_file(original) and is_text_file(conflicted):
+        show_text_diff(original, conflicted)
+    else:
+        print(f"\n💾 Binary files - use 'open' command to view content")
+    
+    while True:
+        print(f"\nChoose action:")
+        print(f"  [o] Keep ORIGINAL   (delete {conflicted.name})")
+        print(f"  [c] Keep CONFLICTED (replace {original.name} with {conflicted.name})")
+        print(f"  [d] Show diff again")
+        print(f"  [v] Open both files in default application")
+        print(f"  [s] Skip this conflict")
+        print(f"  [q] Quit conflict resolution")
+        
+        choice = input("Your choice [o/c/d/v/s/q]: ").strip().lower()
+        
+        if choice in ['o', 'original']:
+            return 'keep_original'
+        elif choice in ['c', 'conflicted']:
+            return 'keep_conflicted'
+        elif choice in ['d', 'diff']:
+            if is_text_file(original) and is_text_file(conflicted):
+                show_text_diff(original, conflicted)
+            else:
+                print("Cannot show diff for binary files")
+        elif choice in ['v', 'view', 'open']:
+            try:
+                subprocess.run(['open', str(original)], check=False)
+                subprocess.run(['open', str(conflicted)], check=False)
+                print("Opened both files in default application")
+            except Exception as e:
+                print(f"Could not open files: {e}")
+        elif choice in ['s', 'skip']:
+            return 'skip'
+        elif choice in ['q', 'quit']:
+            return 'quit'
+        else:
+            print("Invalid choice. Please enter o, c, d, v, s, or q.")
+
+def resolve_conflicts_dry_run(different_files: List[Dict]) -> int:
+    """Show what conflict resolution actions would be taken without doing them."""
+    if not different_files:
+        return 0
+    
+    print(f"\n🔧 CONFLICT RESOLUTION PREVIEW (DRY RUN)")
+    print(f"Found {len(different_files)} file(s) with different content that would need resolution.")
+    print("Showing what actions would be available for each conflict.\n")
+    
+    for i, conflict in enumerate(different_files, 1):
+        original = Path(conflict['original'])
+        conflicted = Path(conflict['conflicted'])
+        
+        # Skip if files no longer exist
+        if not original.exists() or not conflicted.exists():
+            print(f"⚠️ Conflict {i}/{len(different_files)}: One or both files no longer exist")
+            continue
+        
+        print(f"\n📍 Conflict {i}/{len(different_files)}")
+        print(f"🔀 CONFLICT: {original.name}")
+        print("=" * 60)
+        
+        print("\n📁 ORIGINAL FILE:")
+        print(format_file_info(original))
+        
+        print("\n📁 CONFLICTED FILE:")
+        print(format_file_info(conflicted))
+        
+        # Show diff for text files
+        if is_text_file(original) and is_text_file(conflicted):
+            show_text_diff(original, conflicted)
+        else:
+            print(f"\n💾 Binary files - content differs")
+        
+        print(f"\n🎯 Available actions in interactive mode:")
+        print(f"   [o] Keep ORIGINAL   → Would delete {conflicted.name}")
+        print(f"   [c] Keep CONFLICTED → Would replace {original.name} with {conflicted.name}")
+        print(f"   [s] Skip this conflict")
+        print(f"   [v] Open both files for comparison")
+        print("=" * 60)
+    
+    print(f"\n💡 To actually resolve conflicts, run without --dry-run:")
+    print(f"   ./pCloudSync-deconflict.py [path] -r --resolve")
+    
+    return len(different_files)
+
+def resolve_conflicts(different_files: List[Dict]) -> int:
+    """Interactive conflict resolution for files with different content."""
+    if not different_files:
+        return 0
+    
+    print(f"\n🔧 CONFLICT RESOLUTION MODE")
+    print(f"Found {len(different_files)} file(s) with different content that need resolution.")
+    print("You can choose which version to keep for each conflict.\n")
+    
+    resolved_count = 0
+    
+    for i, conflict in enumerate(different_files, 1):
+        original = Path(conflict['original'])
+        conflicted = Path(conflict['conflicted'])
+        
+        # Skip if files no longer exist
+        if not original.exists() or not conflicted.exists():
+            print(f"Skipping conflict {i}/{len(different_files)}: One or both files no longer exist")
+            continue
+        
+        print(f"\n📍 Conflict {i}/{len(different_files)}")
+        
+        action = resolve_conflict_interactive(original, conflicted)
+        
+        if action == 'keep_original':
+            try:
+                conflicted.unlink()
+                print(f"✅ Deleted {conflicted.name} (kept original)")
+                resolved_count += 1
+            except Exception as e:
+                print(f"❌ Error deleting {conflicted.name}: {e}")
+        
+        elif action == 'keep_conflicted':
+            try:
+                original.unlink()
+                new_path = conflicted.parent / original.name
+                conflicted.rename(new_path)
+                print(f"✅ Replaced {original.name} with conflicted version")
+                resolved_count += 1
+            except Exception as e:
+                print(f"❌ Error replacing {original.name}: {e}")
+        
+        elif action == 'skip':
+            print(f"⏭️ Skipped {original.name}")
+            continue
+        
+        elif action == 'quit':
+            print(f"\n🛑 Exiting conflict resolution. Resolved {resolved_count} conflicts so far.")
+            break
+    
+    return resolved_count
+
 def main():
     parser = argparse.ArgumentParser(
         description="Find and compare conflicted files from cloud sync services"
@@ -418,6 +663,11 @@ def main():
         "--include-local-mounts",
         action="store_true",
         help="Include local physical drives while still excluding cloud/network storage"
+    )
+    parser.add_argument(
+        "--resolve",
+        action="store_true",
+        help="Interactively resolve actual conflicts (files with different content)"
     )
     
     args = parser.parse_args()
@@ -521,6 +771,23 @@ def main():
             print(f"Error comparing {original} and {conflicted}: {e}", file=sys.stderr)
             continue
     
+    # Interactive conflict resolution for different files
+    if args.resolve and different_files:
+        if args.dry_run:
+            # Show what actions would be taken without doing them
+            resolved_count_interactive = resolve_conflicts_dry_run(different_files)
+            print(f"\n🔍 Would show {resolved_count_interactive} conflict(s) for interactive resolution")
+        else:
+            # Actually perform interactive resolution
+            resolved_count_interactive = resolve_conflicts(different_files)
+            # Update the different_files list to remove resolved conflicts
+            if resolved_count_interactive > 0:
+                print(f"\n🎉 Successfully resolved {resolved_count_interactive} conflict(s) interactively")
+                # Re-scan to update different_files list (files may have been deleted/renamed)
+                different_files = [f for f in different_files 
+                                 if Path(f['original']).exists() and Path(f['conflicted']).exists()]
+                different_count = len(different_files)
+    
     # Save list of different files
     active_count = 0
     if different_files or os.path.exists(args.output):
@@ -545,8 +812,10 @@ def main():
     
     if active_count > 0:
         print(f"\nFiles requiring manual review are tracked in: {args.output}")
-        print("The file contains all active conflicts from this and previous runs.")
+        print("The file contains all active conflicts from this and previous runs.")  
         print("Resolved conflicts are marked but kept for history.")
+        if not args.resolve:
+            print(f"\n💡 Tip: Use --resolve to interactively resolve conflicts with different content")
 
 if __name__ == "__main__":
     main()

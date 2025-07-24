@@ -1,0 +1,5 @@
+# Makefile content
+all: build
+
+build:
+	echo building

@@ -609,6 +609,11 @@ def main():
         description="Find and compare conflicted files from cloud sync services"
     )
     parser.add_argument(
+        "--version",
+        action="version",
+        version="pCloudSync-deconflict 1.1.0"
+    )
+    parser.add_argument(
         "path",
         help="Path to the directory to scan"
     )

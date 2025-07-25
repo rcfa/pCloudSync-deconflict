@@ -207,10 +207,10 @@ def find_conflicted_pairs(directory: str, recursive: bool = True, show_progress:
                 files_processed += 1
                 update_progress(current_dir)
                 
-                if " [conflicted]" in filename:
+                if " [conflicted]" in filename or " (conflicted)" in filename:
                     try:
                         conflicted_file = current_dir / filename
-                        original_name = filename.replace(" [conflicted]", "")
+                        original_name = filename.replace(" [conflicted]", "").replace(" (conflicted)", "")
                         original_file = current_dir / original_name
                         
                         # Check if the original file exists
@@ -228,9 +228,9 @@ def find_conflicted_pairs(directory: str, recursive: bool = True, show_progress:
                 files_processed += 1
                 update_progress(path)
                 
-                if item.is_file() and " [conflicted]" in item.name:
+                if item.is_file() and (" [conflicted]" in item.name or " (conflicted)" in item.name):
                     conflicted_file = item
-                    original_name = item.name.replace(" [conflicted]", "")
+                    original_name = item.name.replace(" [conflicted]", "").replace(" (conflicted)", "")
                     original_file = item.parent / original_name
                     
                     if original_file.exists() and original_file.is_file():
@@ -611,7 +611,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="pCloudSync-deconflict 1.2.0"
+        version="pCloudSync-deconflict 1.2.1"
     )
     parser.add_argument(
         "paths",

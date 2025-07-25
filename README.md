@@ -7,7 +7,7 @@
 
 ## Overview
 
-When pCloud encounters sync conflicts (e.g., when the same file is modified on multiple devices), it creates duplicate files with " [conflicted]" in the filename. This tool helps you:
+When pCloud encounters sync conflicts (e.g., when the same file is modified on multiple devices), it creates duplicate files with " [conflicted]" or " (conflicted)" in the filename. This tool helps you:
 
 - **🔍 Find all conflicted file pairs** automatically
 - **⚡ Compare them intelligently** using SHA256 hashing or byte comparison
@@ -33,7 +33,7 @@ When pCloud encounters sync conflicts (e.g., when the same file is modified on m
 
 ### 🛡️ Safety & Reliability
 - **Multiple safety modes**: Dry-run, confirmation prompts, or auto-delete
-- **Never touches originals**: Only processes `[conflicted]` files
+- **Never touches originals**: Only processes `[conflicted]` and `(conflicted)` files
 - **Comprehensive testing**: 17+ test scenarios covering all edge cases
 - **Progress tracking**: Real-time progress with smooth spinner animation
 - **Error handling**: Graceful handling of permissions and edge cases
@@ -191,7 +191,7 @@ cd test-data && ./create-test-files.sh
 ## 🔧 How It Works
 
 ### 1. **Discovery Phase**
-- Recursively scans directories for files containing " [conflicted]"
+- Recursively scans directories for files containing " [conflicted]" or " (conflicted)"
 - Matches each conflicted file with its original counterpart
 - Skips cloud storage mounts automatically for better performance
 
@@ -258,7 +258,8 @@ make clean
 
 ## 📈 Version History
 
-- **v1.2.0** (Latest): Support for processing multiple directories in a single run
+- **v1.2.1** (Latest): Added support for `(conflicted)` pattern in addition to `[conflicted]`
+- **v1.2.0**: Support for processing multiple directories in a single run
 - **v1.1.1**: Added `--version` option for standard CLI behavior
 - **v1.1.0**: Major update with interactive conflict resolution and comprehensive test suite
 - **v1.0.0**: Initial stable release with auto-delete and JSON tracking

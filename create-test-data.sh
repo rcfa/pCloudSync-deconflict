@@ -6,7 +6,7 @@ set -e  # Exit on any error
 echo "Creating comprehensive test files..."
 
 # Create the test-data directory structure
-mkdir -p test-data/{level1/{level2,level2b},root-level,unicode-files,edge-cases}
+mkdir -p test-data/{level1/{level2,level2b},root-level,unicode-files,edge-cases,parentheses-conflicts}
 
 # Change to test-data directory for file creation
 cd test-data
@@ -97,13 +97,33 @@ echo "Modified last line" >> "edge-cases/large-file [conflicted].txt"
 echo "This has no matching original" > "edge-cases/orphaned [conflicted].txt"
 echo "This has no matching conflicted" > "edge-cases/no-conflict-original.txt"
 
+# Test files with (conflicted) pattern instead of [conflicted]
+echo "Identical content with parentheses" > parentheses-conflicts/identical-parens.txt
+echo "Identical content with parentheses" > "parentheses-conflicts/identical-parens (conflicted).txt"
+
+echo "Different original with parens" > parentheses-conflicts/different-parens.txt
+echo "Different modified with parens" > "parentheses-conflicts/different-parens (conflicted).txt"
+
+# Mixed patterns in same directory
+echo "Mixed pattern identical" > parentheses-conflicts/mixed-pattern.txt
+echo "Mixed pattern identical" > "parentheses-conflicts/mixed-pattern [conflicted].txt"
+echo "Mixed pattern identical" > "parentheses-conflicts/mixed-pattern (conflicted).txt"
+
+# Unicode with parentheses pattern
+echo "Unicode café ☕ identical" > "parentheses-conflicts/unicode-parens.txt"
+echo "Unicode café ☕ identical" > "parentheses-conflicts/unicode-parens (conflicted).txt"
+
+# Orphaned (conflicted) file
+echo "Orphaned with parentheses" > "parentheses-conflicts/orphaned-parens (conflicted).txt"
+
 cd ..  # Return to project root directory
 
 echo "✅ Test files created successfully in test-data/"
 echo "📊 Test file summary:"
-echo "   - Identical files (should auto-delete): 6 pairs"
-echo "   - Different files (need resolution): 6 pairs"
-echo "   - Unicode/special chars: 4 pairs"
-echo "   - Edge cases: 3 items"
+echo "   - Identical files (should auto-delete): 9 pairs (6 [conflicted] + 3 (conflicted))"
+echo "   - Different files (need resolution): 8 pairs (6 [conflicted] + 2 (conflicted))"
+echo "   - Unicode/special chars: 5 pairs"
+echo "   - Edge cases: 5 items"
 echo "   - Multi-level nesting: ✓"
 echo "   - Files without extensions: ✓"
+echo "   - Both [conflicted] and (conflicted) patterns: ✓"

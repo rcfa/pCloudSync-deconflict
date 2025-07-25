@@ -48,6 +48,10 @@ clean:
 	rm -rf build/ dist/ __pycache__/ *.spec
 	find . -name "*.pyc" -delete
 	find . -name "*.pyo" -delete
+	@echo "Cleaning test data..."
+	rm -rf test-data/
+	@echo "Cleaning test artifacts..."
+	rm -f test-conflicts-temp.json
 
 install: build-universal
 	@echo "Installing $(APP_NAME) to /usr/local/bin..."

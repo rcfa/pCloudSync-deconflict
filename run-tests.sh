@@ -19,10 +19,9 @@ echo "🧪 pCloudSync-deconflict Test Suite"
 echo "===================================="
 
 # Check if test data exists, create if needed
-if [ ! -d "$TEST_DIR" ]; then
-    echo -e "${YELLOW}⚠️  Test data not found. Creating test files...${NC}"
-    mkdir -p "$TEST_DIR"/{level1/{level2,level2b},root-level,unicode-files,edge-cases}
-    cd "$TEST_DIR" && ./create-test-files.sh && cd ..
+if [ ! -d "$TEST_DIR" ] || [ ! -d "$TEST_DIR/root-level" ] || [ ! -d "$TEST_DIR/level1" ]; then
+    echo -e "${YELLOW}⚠️  Test data not found or incomplete. Creating test files...${NC}"
+    ./create-test-data.sh
 fi
 
 # Function to run a test
@@ -156,4 +155,4 @@ echo "   $SCRIPT $TEST_DIR -r --resolve"
 echo "   $SCRIPT $TEST_DIR -r --auto-delete"
 echo ""
 echo -e "${YELLOW}📁 Test data location:${NC} $TEST_DIR/"
-echo -e "${YELLOW}🔧 Recreate test data:${NC} cd $TEST_DIR && ./create-test-files.sh"
+echo -e "${YELLOW}🔧 Recreate test data:${NC} ./create-test-data.sh"

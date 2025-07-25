@@ -5,6 +5,12 @@ set -e  # Exit on any error
 
 echo "Creating comprehensive test files..."
 
+# Create the test-data directory structure
+mkdir -p test-data/{level1/{level2,level2b},root-level,unicode-files,edge-cases}
+
+# Change to test-data directory for file creation
+cd test-data
+
 # Root level - IDENTICAL files (should be auto-deletable)
 echo "This content is identical in both files" > root-level/identical-text-file.txt
 echo "This content is identical in both files" > "root-level/identical-text-file [conflicted].txt"
@@ -91,7 +97,9 @@ echo "Modified last line" >> "edge-cases/large-file [conflicted].txt"
 echo "This has no matching original" > "edge-cases/orphaned [conflicted].txt"
 echo "This has no matching conflicted" > "edge-cases/no-conflict-original.txt"
 
-echo "✅ Test files created successfully!"
+cd ..  # Return to project root directory
+
+echo "✅ Test files created successfully in test-data/"
 echo "📊 Test file summary:"
 echo "   - Identical files (should auto-delete): 6 pairs"
 echo "   - Different files (need resolution): 6 pairs"

@@ -116,6 +116,12 @@ echo "Unicode café ☕ identical" > "parentheses-conflicts/unicode-parens (conf
 # Orphaned (conflicted) file
 echo "Orphaned with parentheses" > "parentheses-conflicts/orphaned-parens (conflicted).txt"
 
+# Conflicted DIRECTORIES (detected & reported loudly, never auto-modified)
+mkdir -p "edge-cases/conflicted-folder [conflicted]"
+echo "A file living inside a [conflicted] directory" > "edge-cases/conflicted-folder [conflicted]/inside.txt"
+mkdir -p "parentheses-conflicts/conflicted-folder (conflicted)"
+echo "A file living inside a (conflicted) directory" > "parentheses-conflicts/conflicted-folder (conflicted)/inside.txt"
+
 cd ..  # Return to project root directory
 
 echo "✅ Test files created successfully in test-data/"
@@ -124,6 +130,8 @@ echo "   - Identical files (should auto-delete): 9 pairs (6 [conflicted] + 3 (co
 echo "   - Different files (need resolution): 8 pairs (6 [conflicted] + 2 (conflicted))"
 echo "   - Unicode/special chars: 5 pairs"
 echo "   - Edge cases: 5 items"
+echo "   - Orphaned conflicted files: 2 (1 [conflicted] + 1 (conflicted))"
+echo "   - Conflicted directories: 2 (1 [conflicted] + 1 (conflicted))"
 echo "   - Multi-level nesting: ✓"
 echo "   - Files without extensions: ✓"
 echo "   - Both [conflicted] and (conflicted) patterns: ✓"

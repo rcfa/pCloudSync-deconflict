@@ -302,6 +302,16 @@ def confirm_deletion(file_path: Path) -> bool:
     response = input(f"Delete '{file_path.name}'? [y/N]: ").strip().lower()
     return response in ['y', 'yes']
 
+def default_output_file() -> str:
+    """Return the default conflict-tracking file path.
+
+    Anchored in the user's macOS Application Support directory so the tool
+    always reads and writes the *same* tracking file regardless of the
+    current working directory it happens to be launched from.
+    """
+    app_dir = Path.home() / "Library" / "Application Support" / "pCloudSync-deconflict"
+    return str(app_dir / "conflicted_files_to_review.json")
+
 def load_existing_conflicts(output_file: str) -> Dict[str, Dict]:
     """Load existing conflicts from JSON file if it exists."""
     if not os.path.exists(output_file):
@@ -329,8 +339,13 @@ def validate_conflict_still_exists(conflict: Dict) -> bool:
     except Exception:
         return False
 
-def save_different_files_list(different_files: List[Dict], output_file: str = "conflicted_files_to_review.json"):
+def save_different_files_list(different_files: List[Dict], output_file: str = None):
     """Save the list of different files to a JSON file for manual review, merging with existing conflicts."""
+    if output_file is None:
+        output_file = default_output_file()
+    # Ensure the destination directory exists (covers both the default
+    # Application Support location and any custom -o path the user gives).
+    Path(output_file).parent.mkdir(parents=True, exist_ok=True)
     # Load existing conflicts
     existing_conflicts = load_existing_conflicts(output_file)
     
@@ -647,8 +662,9 @@ def main():
     )
     parser.add_argument(
         "-o", "--output",
-        default="conflicted_files_to_review.json",
-        help="Output file for list of different files (default: conflicted_files_to_review.json)"
+        default=None,
+        help="Output file for list of different files "
+             "(default: ~/Library/Application Support/pCloudSync-deconflict/conflicted_files_to_review.json)"
     )
     parser.add_argument(
         "--dry-run",
@@ -677,7 +693,12 @@ def main():
     )
     
     args = parser.parse_args()
-    
+
+    # Resolve the default tracking-file location once, independent of the
+    # current working directory. An explicit -o always wins.
+    if args.output is None:
+        args.output = default_output_file()
+
     # Validate all paths first
     for path in args.paths:
         if not os.path.exists(path):

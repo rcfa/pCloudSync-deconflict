@@ -214,6 +214,7 @@ When using `--resolve`, for each conflict you can:
 ## 📊 Conflict Tracking
 
 The tool maintains a `conflicted_files_to_review.json` file that:
+- **Lives in a fixed location** — `~/Library/Application Support/pCloudSync-deconflict/` by default, so tracking is independent of the working directory you launch from (override with `-o`)
 - **Accumulates conflicts** across multiple runs
 - **Tracks resolution status** (active vs resolved)
 - **Includes rich metadata**: Sizes, timestamps, hashes, reasons

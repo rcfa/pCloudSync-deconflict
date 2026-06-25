@@ -122,6 +122,30 @@ make install    # Installs to /usr/local/bin
 --auto-delete --resolve --dry-run    # Preview complete workflow
 ```
 
+### Orphaned Conflicted Files (NEW in v1.4.0)
+An **orphan** is a `[conflicted]`/`(conflicted)` file whose original is missing — so it
+forms no pair. Earlier versions silently ignored these; they are now detected, logged,
+and can be cleaned up:
+```bash
+# Interactive: --resolve now handles BOTH conflicts and orphans in one pass
+--resolve                 # Resolve conflicts AND orphans interactively
+--resolve-conflicts       # Only conflicts (pairs with different content)
+--resolve-orphans         # Only orphans
+
+# Non-interactive orphan actions (mutually exclusive)
+--normalize-orphans       # Rename orphans, stripping the conflict marker
+--nuke-orphans            # Delete orphans outright
+```
+With no orphan option, orphans are **reported and logged** but left untouched.
+When normalizing, if the stripped name is already taken the file is treated as a real
+conflict (re-paired and compared) instead of being overwritten.
+
+### Conflicted Directories
+A *directory* whose name carries a conflict marker is **detected and reported loudly**
+but never acted on automatically — it may be an app bundle, a nested tree, or something
+else that needs case-by-case handling. The scan still descends into it, so conflicted
+files nested inside are found normally.
+
 ## 🎯 Workflows & Use Cases
 
 ### 📅 Daily pCloud Cleanup
@@ -203,6 +227,8 @@ cd test-data && ./create-test-files.sh
 ### 3. **Resolution Phase**
 - **Identical files**: Auto-deleted (with `--auto-delete`) or confirmed
 - **Different files**: Interactive resolution (with `--resolve`) or logged to JSON
+- **Orphans** (conflicted file, no original): normalized/nuked/resolved interactively, or logged
+- **Conflicted directories**: reported loudly for manual handling, never auto-modified
 
 ### 4. **Interactive Resolution**
 When using `--resolve`, for each conflict you can:
@@ -259,7 +285,8 @@ make clean
 
 ## 📈 Version History
 
-- **v1.3.0** (Latest): Conflict-tracking file now lives in a fixed location (`~/Library/Application Support/pCloudSync-deconflict/`) so it no longer depends on the working directory the tool is launched from
+- **v1.4.0** (Latest): Detect and handle **orphaned** conflicted files (no original) via `--resolve`/`--resolve-orphans`/`--normalize-orphans`/`--nuke-orphans`; loudly report **conflicted directories**; orphans and directories are tracked in the JSON. Fixes a bug where orphan-only runs exited without doing anything
+- **v1.3.0**: Conflict-tracking file now lives in a fixed location (`~/Library/Application Support/pCloudSync-deconflict/`) so it no longer depends on the working directory the tool is launched from
 - **v1.2.1**: Added support for `(conflicted)` pattern in addition to `[conflicted]`
 - **v1.2.0**: Support for processing multiple directories in a single run
 - **v1.1.1**: Added `--version` option for standard CLI behavior

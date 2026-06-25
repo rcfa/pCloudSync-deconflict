@@ -81,9 +81,34 @@ def is_under_cloud_storage(path: Path, mount_points: Set[str]) -> bool:
             return True
     return False
 
-def find_conflicted_pairs(directory: str, recursive: bool = True, show_progress: bool = True, cross_device: bool = False, include_local_mounts: bool = False) -> List[Tuple[Path, Path]]:
-    """Find all pairs of original and conflicted files in a directory."""
+# The two markers pCloud injects into conflicted file/directory names.
+CONFLICT_MARKERS = (" [conflicted]", " (conflicted)")
+
+
+def is_conflict_name(name: str) -> bool:
+    """True if the name carries a pCloud conflict marker."""
+    return any(marker in name for marker in CONFLICT_MARKERS)
+
+
+def strip_conflict_marker(name: str) -> str:
+    """Return the name with any conflict marker(s) removed (the 'normalized' name)."""
+    for marker in CONFLICT_MARKERS:
+        name = name.replace(marker, "")
+    return name
+
+
+def find_conflicted_pairs(directory: str, recursive: bool = True, show_progress: bool = True, cross_device: bool = False, include_local_mounts: bool = False) -> Tuple[List[Tuple[Path, Path]], List[Path], List[Path]]:
+    """Scan a directory for conflict artifacts.
+
+    Returns a 3-tuple ``(pairs, orphans, conflicted_dirs)``:
+      * pairs           - (original, conflicted) file pairs where both exist
+      * orphans         - conflicted files whose original is missing
+      * conflicted_dirs - directories whose name carries a conflict marker
+    All three are gathered in a single tree walk.
+    """
     conflicted_pairs = []
+    orphans = []
+    conflicted_dirs = []
     skipped_paths = []
     
     path = Path(directory)
@@ -201,22 +226,30 @@ def find_conflicted_pairs(directory: str, recursive: bool = True, show_progress:
                         pass
             
             update_progress(current_dir)
-            
+
+            # Flag any conflict-marked subdirectories (still descend into them so
+            # conflicted files nested inside are found too).
+            for dirname in dirs:
+                if is_conflict_name(dirname):
+                    conflicted_dirs.append(current_dir / dirname)
+
             # Process files in this directory
             for filename in files:
                 files_processed += 1
                 update_progress(current_dir)
                 
-                if " [conflicted]" in filename or " (conflicted)" in filename:
+                if is_conflict_name(filename):
                     try:
                         conflicted_file = current_dir / filename
-                        original_name = filename.replace(" [conflicted]", "").replace(" (conflicted)", "")
+                        original_name = strip_conflict_marker(filename)
                         original_file = current_dir / original_name
-                        
-                        # Check if the original file exists
+
+                        # Pair if the original exists, otherwise it's an orphan.
                         try:
                             if original_file.exists() and original_file.is_file():
                                 conflicted_pairs.append((original_file, conflicted_file))
+                            else:
+                                orphans.append(conflicted_file)
                         except (PermissionError, OSError) as e:
                             skipped_paths.append((str(original_file), str(e)))
                     except (PermissionError, OSError) as e:
@@ -228,13 +261,20 @@ def find_conflicted_pairs(directory: str, recursive: bool = True, show_progress:
                 files_processed += 1
                 update_progress(path)
                 
-                if item.is_file() and (" [conflicted]" in item.name or " (conflicted)" in item.name):
+                if not is_conflict_name(item.name):
+                    continue
+
+                if item.is_dir():
+                    conflicted_dirs.append(item)
+                elif item.is_file():
                     conflicted_file = item
-                    original_name = item.name.replace(" [conflicted]", "").replace(" (conflicted)", "")
+                    original_name = strip_conflict_marker(item.name)
                     original_file = item.parent / original_name
-                    
+
                     if original_file.exists() and original_file.is_file():
                         conflicted_pairs.append((original_file, conflicted_file))
+                    else:
+                        orphans.append(conflicted_file)
         except (PermissionError, OSError) as e:
             skipped_paths.append((str(path), str(e)))
     
@@ -257,7 +297,7 @@ def find_conflicted_pairs(directory: str, recursive: bool = True, show_progress:
             for path, error in skipped_paths[:5]:
                 print(f"  - {path}: {error}")
     
-    return conflicted_pairs
+    return conflicted_pairs, orphans, conflicted_dirs
 
 def compare_files(file1: Path, file2: Path, method: str = "hash") -> Dict[str, any]:
     """Compare two files and return comparison results."""
@@ -312,23 +352,26 @@ def default_output_file() -> str:
     app_dir = Path.home() / "Library" / "Application Support" / "pCloudSync-deconflict"
     return str(app_dir / "conflicted_files_to_review.json")
 
-def load_existing_conflicts(output_file: str) -> Dict[str, Dict]:
-    """Load existing conflicts from JSON file if it exists."""
+def load_existing_tracking(output_file: str) -> Tuple[Dict[str, Dict], Dict[str, Dict], Dict[str, Dict]]:
+    """Load existing tracking data, returning (conflicts, orphans, dirs) dicts.
+
+    Each dict is keyed by the field that uniquely identifies an entry so new
+    findings can be merged in: conflicts by 'original', orphans and directories
+    by their on-disk path.
+    """
     if not os.path.exists(output_file):
-        return {}
-    
+        return {}, {}, {}
+
     try:
         with open(output_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            # Convert list to dict keyed by original file path for easy merging
-            conflicts = {}
-            for conflict in data.get('conflicts', data.get('files', [])):
-                key = conflict['original']
-                conflicts[key] = conflict
-            return conflicts
+        conflicts = {c['original']: c for c in data.get('conflicts', data.get('files', []))}
+        orphans = {o['conflicted']: o for o in data.get('orphans', [])}
+        dirs = {d['path']: d for d in data.get('conflicted_directories', [])}
+        return conflicts, orphans, dirs
     except Exception as e:
-        print(f"Warning: Could not load existing conflicts file: {e}")
-        return {}
+        print(f"Warning: Could not load existing tracking file: {e}")
+        return {}, {}, {}
 
 def validate_conflict_still_exists(conflict: Dict) -> bool:
     """Check if a conflict pair still exists on disk."""
@@ -339,47 +382,100 @@ def validate_conflict_still_exists(conflict: Dict) -> bool:
     except Exception:
         return False
 
-def save_different_files_list(different_files: List[Dict], output_file: str = None):
-    """Save the list of different files to a JSON file for manual review, merging with existing conflicts."""
+def save_tracking(different_files: List[Dict], orphan_records: List[Dict] = None,
+                  dir_records: List[Dict] = None, output_file: str = None):
+    """Merge new findings into the tracking JSON and persist all three categories.
+
+    Returns ``(output_file, active_conflicts, resolved_conflicts,
+    active_orphans, active_dirs)``. Each category tracks ``still_exists`` so
+    items handled (deleted/renamed) in this run are recorded as resolved.
+    """
+    orphan_records = orphan_records or []
+    dir_records = dir_records or []
     if output_file is None:
         output_file = default_output_file()
     # Ensure the destination directory exists (covers both the default
     # Application Support location and any custom -o path the user gives).
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
-    # Load existing conflicts
-    existing_conflicts = load_existing_conflicts(output_file)
-    
-    # Update with new conflicts
+
+    now = datetime.now().isoformat()
+    existing_conflicts, existing_orphans, existing_dirs = load_existing_tracking(output_file)
+
+    # --- Conflicts (pairs) -------------------------------------------------
     for conflict in different_files:
-        key = conflict['original']
-        conflict['last_seen'] = datetime.now().isoformat()
+        conflict['last_seen'] = now
         conflict['still_exists'] = True
-        existing_conflicts[key] = conflict
-    
-    # Check if old conflicts still exist
+        existing_conflicts[conflict['original']] = conflict
+    new_conflict_keys = {c['original'] for c in different_files}
     for key, conflict in existing_conflicts.items():
-        if key not in [c['original'] for c in different_files]:
+        if key not in new_conflict_keys:
             if validate_conflict_still_exists(conflict):
                 conflict['still_exists'] = True
-                conflict['last_checked'] = datetime.now().isoformat()
+                conflict['last_checked'] = now
             else:
                 conflict['still_exists'] = False
-                conflict['resolved_at'] = datetime.now().isoformat()
-    
-    # Filter to only active conflicts (unless keeping resolved ones for history)
+                conflict['resolved_at'] = now
+
+    # --- Orphans -----------------------------------------------------------
+    # still_exists reflects the disk *now*, so anything nuked/normalized this
+    # run is correctly recorded as resolved.
+    for orphan in orphan_records:
+        key = orphan['conflicted']
+        orphan['last_seen'] = now
+        orphan['still_exists'] = Path(key).exists()
+        if not orphan['still_exists']:
+            orphan['resolved_at'] = now
+        existing_orphans[key] = orphan
+    new_orphan_keys = {o['conflicted'] for o in orphan_records}
+    for key, orphan in existing_orphans.items():
+        if key not in new_orphan_keys:
+            if Path(key).exists():
+                orphan['still_exists'] = True
+                orphan['last_checked'] = now
+            else:
+                orphan['still_exists'] = False
+                orphan.setdefault('resolved_at', now)
+
+    # --- Conflicted directories (report-only, never acted on) --------------
+    for entry in dir_records:
+        key = entry['path']
+        entry['last_seen'] = now
+        entry['still_exists'] = Path(key).exists()
+        existing_dirs[key] = entry
+    new_dir_keys = {d['path'] for d in dir_records}
+    for key, entry in existing_dirs.items():
+        if key not in new_dir_keys:
+            if Path(key).exists():
+                entry['still_exists'] = True
+                entry['last_checked'] = now
+            else:
+                entry['still_exists'] = False
+                entry.setdefault('resolved_at', now)
+
     active_conflicts = [c for c in existing_conflicts.values() if c.get('still_exists', True)]
+    active_orphans = [o for o in existing_orphans.values() if o.get('still_exists', True)]
+    active_dirs = [d for d in existing_dirs.values() if d.get('still_exists', True)]
     all_conflicts = list(existing_conflicts.values())
-    
-    # Save updated list
+    all_orphans = list(existing_orphans.values())
+    all_dirs = list(existing_dirs.values())
+
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump({
-            "last_updated": datetime.now().isoformat(),
+            "last_updated": now,
             "total_active_conflicts": len(active_conflicts),
             "total_resolved_conflicts": len(all_conflicts) - len(active_conflicts),
-            "conflicts": all_conflicts
+            "conflicts": all_conflicts,
+            "total_active_orphans": len(active_orphans),
+            "total_resolved_orphans": len(all_orphans) - len(active_orphans),
+            "orphans": all_orphans,
+            "total_active_conflicted_dirs": len(active_dirs),
+            "total_resolved_conflicted_dirs": len(all_dirs) - len(active_dirs),
+            "conflicted_directories": all_dirs,
         }, f, indent=2, ensure_ascii=False, sort_keys=True)
-    
-    return output_file, len(active_conflicts), len(all_conflicts) - len(active_conflicts)
+
+    return (output_file, len(active_conflicts),
+            len(all_conflicts) - len(active_conflicts),
+            len(active_orphans), len(active_dirs))
 
 def format_file_info(file_path: Path) -> str:
     """Format file metadata for display."""
@@ -619,6 +715,168 @@ def resolve_conflicts(different_files: List[Dict]) -> int:
     
     return resolved_count
 
+def build_orphan_record(orphan: Path) -> Dict:
+    """Build a JSON-tracking record for an orphaned conflicted file."""
+    record = {
+        "conflicted": str(orphan),
+        "normalized_target": str(orphan.parent / strip_conflict_marker(orphan.name)),
+    }
+    try:
+        stat = orphan.stat()
+        record["size"] = stat.st_size
+        record["mtime"] = datetime.fromtimestamp(stat.st_mtime).isoformat()
+    except OSError:
+        pass
+    return record
+
+def build_dir_record(directory: Path) -> Dict:
+    """Build a JSON-tracking record for a conflicted directory."""
+    return {
+        "path": str(directory),
+        "normalized_target": str(directory.parent / strip_conflict_marker(directory.name)),
+    }
+
+def resolve_orphan_interactive(orphan: Path) -> str:
+    """Prompt for what to do with a single orphan. Returns the chosen action."""
+    target = orphan.parent / strip_conflict_marker(orphan.name)
+    collision = target.exists()
+
+    print(f"\n🗑️  ORPHAN: {orphan.name}   (no original found)")
+    print("=" * 60)
+    print(format_file_info(orphan))
+
+    while True:
+        print(f"\nChoose action:")
+        print(f"  [n] Nuke (delete {orphan.name})")
+        if collision:
+            print(f"  [r] Normalize → '{target.name}' EXISTS; will re-pair and compare")
+        else:
+            print(f"  [r] Normalize (rename → {target.name})")
+        print(f"  [s] Skip this orphan")
+        print(f"  [q] Quit orphan resolution")
+
+        choice = input("Your choice [n/r/s/q]: ").strip().lower()
+        if choice in ['n', 'nuke']:
+            return 'nuke'
+        elif choice in ['r', 'rename', 'normalize']:
+            return 'normalize'
+        elif choice in ['s', 'skip']:
+            return 'skip'
+        elif choice in ['q', 'quit']:
+            return 'quit'
+        else:
+            print("Invalid choice. Please enter n, r, s, or q.")
+
+def process_orphans(orphans: List[Path], mode: str, dry_run: bool, method: str) -> Tuple[Dict[str, int], List[Dict]]:
+    """Act on orphaned conflicted files.
+
+    mode is one of 'interactive', 'nuke', 'normalize', or None (report-only).
+    Returns (tally, repaired_conflicts) where repaired_conflicts holds
+    compare_files() results for orphans whose normalize target already existed
+    and turned out to differ (so they get logged as real conflicts).
+    """
+    tally = {'nuked': 0, 'normalized': 0, 'skipped': 0, 'repaired': 0, 'errors': 0}
+    repaired_conflicts = []
+    if not orphans:
+        return tally, repaired_conflicts
+
+    print(f"\n🧹 ORPHANED CONFLICTED FILES ({len(orphans)} found)")
+    if mode is None:
+        print("   (report-only — re-run with --resolve-orphans, --nuke-orphans, "
+              "or --normalize-orphans to act on these)")
+        for orphan in orphans:
+            print(f"   • {orphan}")
+        tally['skipped'] = len(orphans)
+        return tally, repaired_conflicts
+
+    for i, orphan in enumerate(orphans, 1):
+        if not orphan.exists():
+            continue
+
+        if mode == 'interactive':
+            if dry_run:
+                # Preview only — never block on input() during a dry run.
+                target = orphan.parent / strip_conflict_marker(orphan.name)
+                note = " (target exists → would re-pair)" if target.exists() else f" → {target.name}"
+                print(f"\n🗑️  ORPHAN: {orphan.name}  "
+                      f"(would prompt: [n]uke / [r]normalize{note} / [s]kip)")
+                tally['skipped'] += 1
+                continue
+            action = resolve_orphan_interactive(orphan)
+            if action == 'quit':
+                print(f"\n🛑 Exiting orphan resolution.")
+                break
+        else:
+            action = mode  # 'nuke' or 'normalize'
+            print(f"\n[{i}/{len(orphans)}] {orphan}")
+
+        if action == 'skip':
+            tally['skipped'] += 1
+            continue
+
+        if action == 'nuke':
+            if dry_run:
+                print(f"  → Would nuke: {orphan}")
+                tally['nuked'] += 1
+            else:
+                try:
+                    orphan.unlink()
+                    print(f"  🗑️  Nuked: {orphan}")
+                    tally['nuked'] += 1
+                except Exception as e:
+                    print(f"  ❌ Error nuking {orphan.name}: {e}")
+                    tally['errors'] += 1
+
+        elif action == 'normalize':
+            target = orphan.parent / strip_conflict_marker(orphan.name)
+            if target.exists():
+                # Target taken ⇒ this is really a pair. Re-pair and compare.
+                tally['repaired'] += 1
+                print(f"  ⚠️  '{target.name}' already exists — re-pairing as a conflict")
+                try:
+                    result = compare_files(target, orphan, method)
+                    if result['identical']:
+                        if dry_run:
+                            print(f"  → Identical to existing; would delete orphan {orphan.name}")
+                        else:
+                            orphan.unlink()
+                            print(f"  🗑️  Orphan identical to existing file; deleted {orphan.name}")
+                    else:
+                        print(f"  ✗ Differs from existing '{target.name}' — logged for review "
+                              f"(use --resolve)")
+                        repaired_conflicts.append(result)
+                except Exception as e:
+                    print(f"  ❌ Re-pair comparison failed: {e}")
+                    tally['errors'] += 1
+            else:
+                if dry_run:
+                    print(f"  → Would normalize: {orphan.name} → {target.name}")
+                    tally['normalized'] += 1
+                else:
+                    try:
+                        orphan.rename(target)
+                        print(f"  ✅ Normalized: {orphan.name} → {target.name}")
+                        tally['normalized'] += 1
+                    except Exception as e:
+                        print(f"  ❌ Error normalizing {orphan.name}: {e}")
+                        tally['errors'] += 1
+
+    return tally, repaired_conflicts
+
+def report_conflicted_dirs(conflicted_dirs: List[Path]) -> None:
+    """Print a loud, hard-to-miss warning about conflict-marked directories."""
+    if not conflicted_dirs:
+        return
+    border = "!" * 70
+    print("\n" + border)
+    print(f"⚠️  ATTENTION: {len(conflicted_dirs)} CONFLICTED DIRECTORY(IES) FOUND")
+    print("These are NOT handled automatically and require manual review.")
+    print("A conflicted directory could be an app bundle, a nested file tree, or")
+    print("something else entirely — each needs different, careful handling:")
+    for directory in conflicted_dirs:
+        print(f"   📁 {directory}")
+    print(border)
+
 def main():
     parser = argparse.ArgumentParser(
         description="Find and compare conflicted files from cloud sync services"
@@ -626,7 +884,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="pCloudSync-deconflict 1.3.0"
+        version="pCloudSync-deconflict 1.4.0"
     )
     parser.add_argument(
         "paths",
@@ -689,10 +947,47 @@ def main():
     parser.add_argument(
         "--resolve",
         action="store_true",
-        help="Interactively resolve actual conflicts (files with different content)"
+        help="Interactively resolve BOTH conflicts (different content) and orphans"
     )
-    
+    parser.add_argument(
+        "--resolve-conflicts",
+        action="store_true",
+        help="Interactively resolve only conflicts (pairs with different content)"
+    )
+    parser.add_argument(
+        "--resolve-orphans",
+        action="store_true",
+        help="Interactively resolve only orphaned conflicted files (no original)"
+    )
+    parser.add_argument(
+        "--nuke-orphans",
+        action="store_true",
+        help="Delete all orphaned conflicted files (no prompts)"
+    )
+    parser.add_argument(
+        "--normalize-orphans",
+        action="store_true",
+        help="Rename all orphaned conflicted files, stripping the conflict marker"
+    )
+
     args = parser.parse_args()
+
+    # Determine conflict (pair) resolution and orphan handling modes.
+    do_resolve_conflicts = args.resolve or args.resolve_conflicts
+
+    orphan_actions = []
+    if args.nuke_orphans:
+        orphan_actions.append('nuke')
+    if args.normalize_orphans:
+        orphan_actions.append('normalize')
+    if args.resolve or args.resolve_orphans:
+        orphan_actions.append('interactive')
+    if len(orphan_actions) > 1:
+        print("Error: choose at most one orphan action "
+              "(--nuke-orphans, --normalize-orphans, or interactive via "
+              "--resolve/--resolve-orphans).", file=sys.stderr)
+        sys.exit(1)
+    orphan_mode = orphan_actions[0] if orphan_actions else None
 
     # Resolve the default tracking-file location once, independent of the
     # current working directory. An explicit -o always wins.
@@ -723,36 +1018,49 @@ def main():
     
     # Accumulate results across all paths
     all_pairs = []
+    all_orphans = []
+    all_conflicted_dirs = []
     path_results = {}
-    
+
     # Process each path
     for path_idx, path in enumerate(args.paths):
         if len(args.paths) > 1:
             print(f"\n{'='*60}")
             print(f"Processing directory {path_idx + 1}/{len(args.paths)}: {path}")
             print(f"{'='*60}\n")
-        
-        # Find conflicted pairs for this path
-        pairs = find_conflicted_pairs(path, args.recursive, show_progress=not args.no_progress, 
-                                     cross_device=args.cross_device, include_local_mounts=args.include_local_mounts)
-        
+
+        # Find conflict artifacts for this path
+        pairs, orphans, conflicted_dirs = find_conflicted_pairs(
+            path, args.recursive, show_progress=not args.no_progress,
+            cross_device=args.cross_device, include_local_mounts=args.include_local_mounts)
+
         # Store results for this path
         path_results[path] = {
             'pairs': pairs,
+            'orphans': orphans,
+            'conflicted_dirs': conflicted_dirs,
             'identical_count': 0,
             'different_count': 0,
             'deleted_files': [],
             'different_files': []
         }
-        
+        all_orphans.extend(orphans)
+        all_conflicted_dirs.extend(conflicted_dirs)
+
         all_pairs.extend(pairs)
     
-    if not all_pairs:
-        print("No conflicted file pairs found in any of the specified directories.")
+    if not all_pairs and not all_orphans and not all_conflicted_dirs:
+        print("No conflicted file pairs found (nor orphans or conflicted directories) "
+              "in any of the specified directories.")
         return
-    
-    print(f"Found {len(all_pairs)} conflicted file pair(s) total\n")
-    
+
+    summary_bits = [f"{len(all_pairs)} conflicted file pair(s)"]
+    if all_orphans:
+        summary_bits.append(f"{len(all_orphans)} orphan(s)")
+    if all_conflicted_dirs:
+        summary_bits.append(f"{len(all_conflicted_dirs)} conflicted directory(ies)")
+    print("Found " + ", ".join(summary_bits) + " total\n")
+
     # Global counters
     total_identical_count = 0
     total_different_count = 0
@@ -840,7 +1148,7 @@ def main():
             continue
     
     # Interactive conflict resolution for different files
-    if args.resolve and all_different_files:
+    if do_resolve_conflicts and all_different_files:
         if args.dry_run:
             # Show what actions would be taken without doing them
             resolved_count_interactive = resolve_conflicts_dry_run(all_different_files)
@@ -852,19 +1160,39 @@ def main():
             if resolved_count_interactive > 0:
                 print(f"\n🎉 Successfully resolved {resolved_count_interactive} conflict(s) interactively")
                 # Re-scan to update all_different_files list (files may have been deleted/renamed)
-                all_different_files = [f for f in all_different_files 
+                all_different_files = [f for f in all_different_files
                                  if Path(f['original']).exists() and Path(f['conflicted']).exists()]
                 total_different_count = len(all_different_files)
-    
-    # Save list of different files
-    active_count = 0
-    if all_different_files or os.path.exists(args.output):
-        output_file, active_count, resolved_count = save_different_files_list(all_different_files, args.output)
+
+    # Capture orphan metadata BEFORE acting on them (nuke/normalize removes the
+    # files, after which size/mtime can't be read).
+    orphan_records = [build_orphan_record(o) for o in all_orphans]
+    dir_records = [build_dir_record(d) for d in all_conflicted_dirs]
+
+    # Handle orphaned conflicted files (report-only when no orphan mode chosen).
+    orphan_tally = None
+    if all_orphans:
+        orphan_tally, repaired_conflicts = process_orphans(
+            all_orphans, orphan_mode, args.dry_run, args.method)
+        if repaired_conflicts:
+            all_different_files.extend(repaired_conflicts)
+            total_different_count += len(repaired_conflicts)
+
+    # Save tracking (conflicts + orphans + directories)
+    active_count = active_orphan_count = active_dir_count = 0
+    if all_different_files or all_orphans or all_conflicted_dirs or os.path.exists(args.output):
+        (output_file, active_count, resolved_count,
+         active_orphan_count, active_dir_count) = save_tracking(
+            all_different_files, orphan_records, dir_records, args.output)
         print(f"\nConflict tracking updated in: {output_file}")
         print(f"  Active conflicts: {active_count}")
         if resolved_count > 0:
             print(f"  Resolved conflicts: {resolved_count}")
-    
+        if active_orphan_count > 0:
+            print(f"  Active orphans: {active_orphan_count}")
+        if active_dir_count > 0:
+            print(f"  Conflicted directories: {active_dir_count}")
+
     # Per-directory summary if multiple paths
     if len(args.paths) > 1:
         print("\n" + "="*60)
@@ -879,26 +1207,56 @@ def main():
                 print(f"   Different files: {results['different_count']}")
                 if results['deleted_files']:
                     print(f"   {'Would delete' if args.dry_run else 'Deleted'}: {len(results['deleted_files'])} file(s)")
-    
+            if results['orphans']:
+                print(f"   Orphaned conflicted files: {len(results['orphans'])}")
+            if results['conflicted_dirs']:
+                print(f"   Conflicted directories: {len(results['conflicted_dirs'])}")
+
     # Overall summary
     print("\n" + "="*50)
     print("OVERALL SUMMARY:")
     print(f"Total conflicted pairs found: {len(all_pairs)}")
     print(f"Identical files: {total_identical_count}")
     print(f"Different files: {total_different_count}")
-    
+    print(f"Orphaned conflicted files: {len(all_orphans)}")
+    print(f"Conflicted directories: {len(all_conflicted_dirs)}")
+
     if all_deleted_files:
         print(f"\n{'Would delete' if args.dry_run else 'Deleted'} {len(all_deleted_files)} identical conflicted file(s)")
-    
+
+    if orphan_tally:
+        verb = "Would " if args.dry_run else ""
+        actions = []
+        if orphan_tally['nuked']:
+            actions.append(f"{verb.lower()}nuked {orphan_tally['nuked']}" if verb else f"nuked {orphan_tally['nuked']}")
+        if orphan_tally['normalized']:
+            actions.append(f"normalized {orphan_tally['normalized']}")
+        if orphan_tally['repaired']:
+            actions.append(f"re-paired {orphan_tally['repaired']}")
+        if orphan_tally['skipped']:
+            actions.append(f"skipped {orphan_tally['skipped']}")
+        if orphan_tally['errors']:
+            actions.append(f"errored on {orphan_tally['errors']}")
+        if actions:
+            prefix = "Would have " if args.dry_run else ""
+            print(f"\nOrphans: {prefix}{', '.join(actions)}")
+
     if total_identical_count > 0 and not args.auto_delete and not args.dry_run and len(all_deleted_files) < total_identical_count:
         print(f"\nTip: Use --auto-delete to automatically delete identical conflicted files")
-    
+
     if active_count > 0:
         print(f"\nFiles requiring manual review are tracked in: {args.output}")
-        print("The file contains all active conflicts from this and previous runs.")  
+        print("The file contains all active conflicts from this and previous runs.")
         print("Resolved conflicts are marked but kept for history.")
-        if not args.resolve:
+        if not do_resolve_conflicts:
             print(f"\n💡 Tip: Use --resolve to interactively resolve conflicts with different content")
+
+    if all_orphans and orphan_mode is None:
+        print(f"\n💡 Tip: {len(all_orphans)} orphan(s) left untouched. Use --resolve-orphans "
+              f"(interactive), --normalize-orphans, or --nuke-orphans to handle them.")
+
+    # Loud, last-thing-on-screen warning about conflicted directories.
+    report_conflicted_dirs(all_conflicted_dirs)
 
 if __name__ == "__main__":
     main()

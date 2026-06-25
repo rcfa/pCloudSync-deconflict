@@ -5,7 +5,7 @@ PYTHON := python3
 PYINSTALLER := pyinstaller
 SOURCE := pCloudSync-deconflict.py
 APP_NAME := pCloudSync-deconflict
-VERSION := 1.3.0
+VERSION := 1.4.0
 
 .PHONY: all clean build-macos build-universal install-deps install uninstall
 

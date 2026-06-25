@@ -626,7 +626,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="pCloudSync-deconflict 1.2.1"
+        version="pCloudSync-deconflict 1.3.0"
     )
     parser.add_argument(
         "paths",

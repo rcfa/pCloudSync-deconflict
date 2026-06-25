@@ -56,6 +56,7 @@ venv.bak/
 
 # Project specific
 conflicted_files_to_review.json
+test-data/
 *.log
 
 # Claude specific

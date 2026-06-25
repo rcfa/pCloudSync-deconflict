@@ -259,7 +259,8 @@ make clean
 
 ## 📈 Version History
 
-- **v1.2.1** (Latest): Added support for `(conflicted)` pattern in addition to `[conflicted]`
+- **v1.3.0** (Latest): Conflict-tracking file now lives in a fixed location (`~/Library/Application Support/pCloudSync-deconflict/`) so it no longer depends on the working directory the tool is launched from
+- **v1.2.1**: Added support for `(conflicted)` pattern in addition to `[conflicted]`
 - **v1.2.0**: Support for processing multiple directories in a single run
 - **v1.1.1**: Added `--version` option for standard CLI behavior
 - **v1.1.0**: Major update with interactive conflict resolution and comprehensive test suite

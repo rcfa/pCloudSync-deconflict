@@ -7,7 +7,7 @@
 
 ## Overview
 
-When pCloud encounters sync conflicts (e.g., when the same file is modified on multiple devices), it creates duplicate files with " [conflicted]" or " (conflicted)" in the filename. This tool helps you:
+When pCloud encounters sync conflicts (e.g., when the same file is modified on multiple devices), it creates duplicate files with " [conflicted]" or " (conflicted)" in the filename — and " [conflicted 2]", " (conflicted 3)", etc. when several conflicts stack up on the same file. This tool helps you:
 
 - **🔍 Find all conflicted file pairs** automatically
 - **⚡ Compare them intelligently** using SHA256 hashing or byte comparison
@@ -215,7 +215,7 @@ cd test-data && ./create-test-files.sh
 ## 🔧 How It Works
 
 ### 1. **Discovery Phase**
-- Recursively scans directories for files containing " [conflicted]" or " (conflicted)"
+- Recursively scans directories for files containing " [conflicted]" / " (conflicted)" — including numbered forms like " [conflicted 2]"
 - Matches each conflicted file with its original counterpart
 - Skips cloud storage mounts automatically for better performance
 
@@ -285,7 +285,8 @@ make clean
 
 ## 📈 Version History
 
-- **v1.4.0** (Latest): Detect and handle **orphaned** conflicted files (no original) via `--resolve`/`--resolve-orphans`/`--normalize-orphans`/`--nuke-orphans`; loudly report **conflicted directories**; orphans and directories are tracked in the JSON. Fixes a bug where orphan-only runs exited without doing anything
+- **v1.4.1** (Latest): Recognize **numbered** conflict markers (`[conflicted 2]`, `(conflicted 3)`, …), not just the bare form, and track each numbered conflict of the same original separately
+- **v1.4.0**: Detect and handle **orphaned** conflicted files (no original) via `--resolve`/`--resolve-orphans`/`--normalize-orphans`/`--nuke-orphans`; loudly report **conflicted directories**; orphans and directories are tracked in the JSON. Fixes a bug where orphan-only runs exited without doing anything
 - **v1.3.0**: Conflict-tracking file now lives in a fixed location (`~/Library/Application Support/pCloudSync-deconflict/`) so it no longer depends on the working directory the tool is launched from
 - **v1.2.1**: Added support for `(conflicted)` pattern in addition to `[conflicted]`
 - **v1.2.0**: Support for processing multiple directories in a single run

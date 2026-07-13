@@ -14,6 +14,7 @@ import subprocess
 import shutil
 import unicodedata
 import mimetypes
+import re
 from pathlib import Path
 from typing import List, Tuple, Dict, Set
 from datetime import datetime
@@ -81,20 +82,21 @@ def is_under_cloud_storage(path: Path, mount_points: Set[str]) -> bool:
             return True
     return False
 
-# The two markers pCloud injects into conflicted file/directory names.
-CONFLICT_MARKERS = (" [conflicted]", " (conflicted)")
+# Matches the markers pCloud injects into conflicted file/directory names:
+#   " [conflicted]"  " [conflicted 2]"  " (conflicted)"  " (conflicted 3)"  ...
+# pCloud escalates to a numbered form ([conflicted N]) when several conflicts
+# collide on the same name, so N (any positive integer) is optional.
+CONFLICT_MARKER_RE = re.compile(r' (?:\[conflicted(?: \d+)?\]|\(conflicted(?: \d+)?\))')
 
 
 def is_conflict_name(name: str) -> bool:
-    """True if the name carries a pCloud conflict marker."""
-    return any(marker in name for marker in CONFLICT_MARKERS)
+    """True if the name carries a pCloud conflict marker (numbered or not)."""
+    return CONFLICT_MARKER_RE.search(name) is not None
 
 
 def strip_conflict_marker(name: str) -> str:
-    """Return the name with any conflict marker(s) removed (the 'normalized' name)."""
-    for marker in CONFLICT_MARKERS:
-        name = name.replace(marker, "")
-    return name
+    """Return the name with every conflict marker removed (the 'normalized' name)."""
+    return CONFLICT_MARKER_RE.sub("", name)
 
 
 def find_conflicted_pairs(directory: str, recursive: bool = True, show_progress: bool = True, cross_device: bool = False, include_local_mounts: bool = False) -> Tuple[List[Tuple[Path, Path]], List[Path], List[Path]]:
@@ -365,7 +367,9 @@ def load_existing_tracking(output_file: str) -> Tuple[Dict[str, Dict], Dict[str,
     try:
         with open(output_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        conflicts = {c['original']: c for c in data.get('conflicts', data.get('files', []))}
+        # Key by the *conflicted* path: it is unique, whereas several numbered
+        # conflicts ([conflicted], [conflicted 2], ...) can share one original.
+        conflicts = {c['conflicted']: c for c in data.get('conflicts', data.get('files', []))}
         orphans = {o['conflicted']: o for o in data.get('orphans', [])}
         dirs = {d['path']: d for d in data.get('conflicted_directories', [])}
         return conflicts, orphans, dirs
@@ -402,11 +406,13 @@ def save_tracking(different_files: List[Dict], orphan_records: List[Dict] = None
     existing_conflicts, existing_orphans, existing_dirs = load_existing_tracking(output_file)
 
     # --- Conflicts (pairs) -------------------------------------------------
+    # Keyed by conflicted path so multiple numbered conflicts of the same
+    # original are each tracked instead of overwriting one another.
     for conflict in different_files:
         conflict['last_seen'] = now
         conflict['still_exists'] = True
-        existing_conflicts[conflict['original']] = conflict
-    new_conflict_keys = {c['original'] for c in different_files}
+        existing_conflicts[conflict['conflicted']] = conflict
+    new_conflict_keys = {c['conflicted'] for c in different_files}
     for key, conflict in existing_conflicts.items():
         if key not in new_conflict_keys:
             if validate_conflict_still_exists(conflict):
@@ -884,7 +890,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="pCloudSync-deconflict 1.4.0"
+        version="pCloudSync-deconflict 1.4.1"
     )
     parser.add_argument(
         "paths",

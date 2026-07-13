@@ -116,6 +116,17 @@ echo "Unicode café ☕ identical" > "parentheses-conflicts/unicode-parens (conf
 # Orphaned (conflicted) file
 echo "Orphaned with parentheses" > "parentheses-conflicts/orphaned-parens (conflicted).txt"
 
+# Multi-level / numbered conflict markers ([conflicted N], (conflicted N))
+mkdir -p multi-level-conflicts
+echo "the original file"        > multi-level-conflicts/file.md
+echo "first conflicting copy"  > "multi-level-conflicts/file [conflicted].md"
+echo "second conflicting copy" > "multi-level-conflicts/file [conflicted 2].md"
+echo "third conflicting copy"  > "multi-level-conflicts/file [conflicted 3].md"
+echo "numbered parens original" > multi-level-conflicts/doc.txt
+echo "numbered parens copy"     > "multi-level-conflicts/doc (conflicted 5).txt"
+# Numbered orphan (no original present)
+echo "numbered orphan, no original" > "multi-level-conflicts/lonely [conflicted 2].md"
+
 # Conflicted DIRECTORIES (detected & reported loudly, never auto-modified)
 mkdir -p "edge-cases/conflicted-folder [conflicted]"
 echo "A file living inside a [conflicted] directory" > "edge-cases/conflicted-folder [conflicted]/inside.txt"
@@ -132,6 +143,7 @@ echo "   - Unicode/special chars: 5 pairs"
 echo "   - Edge cases: 5 items"
 echo "   - Orphaned conflicted files: 2 (1 [conflicted] + 1 (conflicted))"
 echo "   - Conflicted directories: 2 (1 [conflicted] + 1 (conflicted))"
+echo "   - Multi-level/numbered markers: file [conflicted 2/3], doc (conflicted 5), 1 numbered orphan"
 echo "   - Multi-level nesting: ✓"
 echo "   - Files without extensions: ✓"
 echo "   - Both [conflicted] and (conflicted) patterns: ✓"
